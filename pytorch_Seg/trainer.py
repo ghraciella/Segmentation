@@ -29,7 +29,7 @@ target_transform = ClassConverter(CLASSES)
 # this is a dict to return the original class ids from our training labels
 inverse_class_converter = target_transform.get_inverter()
 
-
+# a comment
 transcityscape = Cityscapes('/localdata/Datasets/cityscapes',
                             split='train',
                             mode='fine',
