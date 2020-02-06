@@ -15,7 +15,7 @@ from tqdm import tqdm
 
 
 cuda = torch.cuda.is_available()
-EPOCHS = 3
+EPOCHS = 150
 LOG_FREQUENCY = 10
 lr = 0.001
 
@@ -67,8 +67,6 @@ optimizer = optim.Adam(model.parameters(), lr=lr)
 current_time = datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
 log_dir = 'runs/train/' + current_time
 
-#batch_size
-bs = 2
 
 cudnn.benchmark = True
 
@@ -86,6 +84,8 @@ def train(train_dataloader, val_dataloader, model, loss_criterion, EPOCHS):
     for epoch in range(EPOCHS):  # loop over the dataset multiple times
         running_loss = 0.0
         val_running_loss = 0.0
+        val_counter = 0
+        train_counter = 0
 
         # set a progress bar later with tqdm
         for i in range(0, len(train_dataloader)):
@@ -120,9 +120,10 @@ def train(train_dataloader, val_dataloader, model, loss_criterion, EPOCHS):
 
             # update progress bar status  and print statistics
             running_loss += loss.item()
+            train_counter += 1
             if i % LOG_FREQUENCY == 0:  # print every 100 mini-batches
-                pbar.write('training [%d, %5d] batch_loss: %f' %
-                          (epoch + 1, i + 1, running_loss / (i + 1)))
+                pbar.write('training epoch :%d at iteration %5d  with batch_loss: %f' %
+                          (epoch + 1, i + 1, running_loss / train_counter))
 
 
             #validation
@@ -141,25 +142,34 @@ def train(train_dataloader, val_dataloader, model, loss_criterion, EPOCHS):
                     outputs = model(val_images.cuda())
                     loss = loss_criterion(outputs, val_targets.long().cuda()) 
                     val_running_loss += loss.item()
+                    val_counter += 1
                 
 
 
-            # logging training/validation metrics and prediction images in Tensorboard
-            if (i + 1) % 500 == 0:
-                # runs are organized by training start time
-                
-                writer = SummaryWriter(log_dir)
-                
-                writer.add_scalar('Validation loss', val_running_loss / (500 / LOG_FREQUENCY), i)
+            # # logging training/validation metrics and prediction images in Tensorboard
+            # if (i + 1) % 500 == 0:
+            #     # runs are organized by training start time
+        try:
+            val_images, val_targets = next(val_dataiter)
+        except StopIteration: 
+            # now the dataset is empty -> new epoch
+            val_dataiter = iter(val_dataloader)
+            val_images, val_targets = next(val_dataiter)
+        
+        writer = SummaryWriter(log_dir)
+        
+        writer.add_scalar('Validation loss', val_running_loss / val_counter, epoch)
 
-                writer.add_scalar('Training loss', running_loss / 500, i)
-                val_running_loss = 0.0
-                running_loss = 0.0   
+        writer.add_scalar('Training loss', running_loss / train_counter, epoch)
+        val_running_loss = 0.0
+        running_loss = 0.0   
+        train_counter = 0
+        val_counter = 0
 
-                # show performance on some images of the test set in tensorboard 
-                # writer.add_figure('Performance on test set example',
-                #         visualize(model, val_dataiter, inverse_class_converter, numplots=4),global_step = i)
-                writer.close()
+        # show performance on some images of the test set in tensorboard 
+        writer.add_figure('Performance on test set example',
+                visualize(model, val_images, inverse_class_converter, val_targets),global_step = epoch)
+        writer.close()
 
         # saving weights of model after n iterations
         if (i + 1) % 100 == 0: 
@@ -169,47 +179,34 @@ def train(train_dataloader, val_dataloader, model, loss_criterion, EPOCHS):
     torch.save(model.state_dict(), '/localdata/Grace/Codes/model_weights/' +  current_time + "_final.pth")
     pbar.close()
 
-def visualize(model, dataloader, converter, numplots = 4):
-
-    #test mode
-    model.eval()
-
-    fig, axes = plt.subplots(numplots, 2, figsize=(20, 15))
-    plt.tight_layout()
-
-    axes[0, 0].set_title('input image')
-    axes[0, 1].set_title('prediction')
-    # axes[0, 2].set_title('ground truth')
-
-    for idx in np.arange(numplots):
-        try:
-            images, targets = next(iter(dataloader))
-        except StopIteration:
-            print("Validation Dataset is empty, skipping Visualization")
-            model.train()
-            return fig
-
-        with torch.no_grad():
-            if cuda:
-                images.cuda()
-            output_pred = model(images)
-
-        imgs = 255*images[idx].permute(1, 2, 0).cpu().numpy()
-        masks = torch.argmax(output_pred[idx].float(), dim = 0).cpu().numpy()
-        preds = visualizeMask(masks, converter, imgs.astype(np.uint8))    
-
-    for ax, img, mask, pred in zip(axes, imgs, masks, preds):
-        ax[0].imshow(img)
-        ax[1].imshow(pred)
-        # ax[2].imshow(mask)
-        ax[0].set_xticks([])
-        ax[0].set_yticks([])
-        ax[1].set_xticks([])
-        ax[1].set_yticks([])
-        # ax[2].set_xticks([])
-        # ax[2].set_yticks([])
-
-    model.train()
+def visualize(net, images, converter, targets):
+    '''
+    This function produces a matplotlib figure that shows the networks segmentation output 
+    on images of the evaluation dataset
+    '''
+    num_plots = len(images)
+    model.eval() # set network into test mode (turn off dropout)
+    fig = plt.figure(figsize=(10,num_plots*5), dpi=240)
+    out = []
+    with torch.no_grad():
+        if cuda:
+            images = images.cuda()
+        out = model(images)
+    for idx in np.arange(num_plots): 
+        ax = fig.add_subplot(2*num_plots, 2, 2*idx+1, xticks=[], yticks=[])
+        npimg = 255*images[idx].permute(1, 2, 0).cpu().numpy()
+        nptarget = targets[idx].cpu().numpy()
+        nppreds = torch.argmax(out[idx].float(), dim = 0).cpu().numpy()
+        if idx > num_plots // 2 - 1:
+            outimage = visualizeMask(nppreds, converter)
+        else:
+            outimage = visualizeMask(nppreds, converter, npimg.astype(np.uint8))
+        targetimage = visualizeMask(nptarget, converter)
+        plt.imshow(outimage)
+        ax = fig.add_subplot(2*num_plots, 2, 2*idx+2, xticks=[], yticks=[])
+        plt.imshow(targetimage)
+    plt.tight_layout(pad=0)
+    model.train() # back into training mode
     return fig
 
 
