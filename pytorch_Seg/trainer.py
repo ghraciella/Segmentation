@@ -87,7 +87,6 @@ def train(train_dataloader, val_dataloader, model, loss_criterion, EPOCHS):
         val_counter = 0
         train_counter = 0
 
-        # set a progress bar later with tqdm
         for i in range(0, len(train_dataloader)):
             # zero the parameter gradients
             optimizer.zero_grad()
